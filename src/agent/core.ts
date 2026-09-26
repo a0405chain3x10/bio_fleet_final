@@ -252,14 +252,24 @@ export abstract class AgentCore implements Agent {
       this.tasks.assign(this.mission[0], this.t);
       this.send({ type: 'LOCK', taskId: this.mission[0].id, cost: 0, bidder: this.id });
     }
+    // owner-side re-auction when the route got >30% longer (e.g. blocked aisle), with hysteresis
+    if (!this.mission.length && !o.self.carrying && this.t % 20 === this.id % 20 && this.tasks.current)
+      this.tasks.maybeReauction(this.t, this.eta(true));
     const idle = !o.self.carrying && !this.needsCharge(o) && !this.mission.length;
     if (this.tasks.tick(this.t, idle, (task) => this.bidCost(o, task))) this.onTaskLocked(o);
   }
 
-  protected onTaskLocked(o: Observation): void {
-    const task = this.tasks.current!;
-    this.tasks.lockEta = this.bidCost(o, task) ?? 0;
+  protected onTaskLocked(_o: Observation): void {
+    this.tasks.lockEta = this.eta(false);
     this.releaseSlot();
+  }
+
+  /** Remaining time estimate (ticks) for my locked task: planned path (with detours) or BFS distance. */
+  protected eta(usePath: boolean): number {
+    const task = this.tasks.current;
+    if (!task) return 0;
+    const toPick = usePath && this.goal === task.pickup && this.path.length ? this.path.length : this.distCells(this.cell, task.pickup);
+    return (toPick + this.distCells(task.pickup, task.drop)) * MOVE_TICKS;
   }
 
   protected distCells(from: Cell, to: Cell): number {

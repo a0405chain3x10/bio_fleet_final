@@ -11,6 +11,7 @@ export interface TaskEntry {
   bidT: Map<RobotId, number>;
   heardAt: number;
   lastReauction: number;
+  doneT?: number;
 }
 
 export type Emit = (m: { type: 'BID' | 'RELEASE' | 'LOCK'; taskId: string; cost: number; bidder: RobotId } | { type: 'DONE'; taskId: string } | Omit<TaskMsg, 'from' | 'seq' | 't'>) => void;
@@ -119,7 +120,21 @@ export class TaskBook {
     const e = this.entries.get(taskId);
     if (!e) return;
     e.status = 'done';
+    e.doneT ??= this.lastT;
     e.bids.clear();
+    if (this.myTask === taskId) {
+      this.myTask = null;
+      this.myState = 'none';
+    }
+  }
+
+  /** A heartbeat from a robot that already carries the parcel settles ownership. */
+  onCarrier(id: RobotId, taskId: string): void {
+    const e = this.entries.get(taskId);
+    if (!e || e.status === 'done' || id === this.me) return;
+    e.status = 'locked';
+    e.owner = id;
+    e.ownerCost = -Infinity;
     if (this.myTask === taskId) {
       this.myTask = null;
       this.myState = 'none';
@@ -204,7 +219,12 @@ export class TaskBook {
    * Called every tick. `cost(task)` returns null if infeasible (battery).
    * Returns true when this robot just locked a task.
    */
+  private lastT = 0;
+
   tick(t: number, idle: boolean, cost: (task: Task) => number | null): boolean {
+    this.lastT = t;
+    // bounded memory in long runs: forget delivered tasks after a minute
+    if (t % 100 === 0) for (const [k, e] of this.entries) if (e.status === 'done' && t - (e.doneT ?? t) > 600) this.entries.delete(k);
     if (this.myState === 'bidding') {
       const e = this.entries.get(this.myTask!)!;
       if (e.status !== 'open' || this.outbid(e, this.myCost, t)) {

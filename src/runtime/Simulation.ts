@@ -1,6 +1,6 @@
 import { DEFAULT_PARAMS, type AgentConfig, type AgentParams } from '../agent/contracts.ts';
 import { Grid } from '../shared/grid.ts';
-import { hashSeed } from '../shared/rng.ts';
+import { hashSeed, Rng } from '../shared/rng.ts';
 import { CellType, type Action, type Cell, type Dir, type Task, type Telemetry } from '../shared/types.ts';
 import { FaultSchedule, type FaultEvent } from '../world/faults.ts';
 import { Station, STATION_ID_BASE } from '../world/taskSource.ts';
@@ -19,6 +19,8 @@ export interface SimConfig {
   bus?: Partial<Omit<BusOpts, 'seed'>>;
   /** tasks published by pickup stations at t=0 (CBAA) */
   batch?: Task[];
+  /** continuous mode: pickup stations publish this many new tasks per minute (seeded) */
+  taskRate?: number;
   /** preassigned missions per robot (S1–S3) */
   missions?: Task[][];
   faults?: FaultEvent[];
@@ -39,6 +41,9 @@ export class Simulation {
   private stations: Station[] = [];
   telemetry: (Telemetry | undefined)[] = [];
   trace = 2166136261;
+  private taskRng: Rng;
+  private nextTaskAt = 0;
+  private taskSeq = 0;
 
   constructor(cfg: SimConfig, runtime: AgentRuntime) {
     this.cfg = cfg;
@@ -64,6 +69,7 @@ export class Simulation {
     }
     for (const m of cfg.missions ?? []) for (const task of m) this.world.releaseTask(task);
     this.faults = new FaultSchedule(cfg.faults ?? []);
+    this.taskRng = new Rng(hashSeed(cfg.seed, 0x7a5));
     this.metrics = new Metrics(this.world.bodies.length);
   }
 
@@ -91,10 +97,24 @@ export class Simulation {
       for (const o of a.outbox) (o.to === undefined ? this.io[i].broadcast(o.msg) : this.io[i].send(o.to, o.msg));
       this.telemetry[i] = a.telemetry;
     }
+    this.generateTasks();
     for (const s of this.stations) s.tick(this.world);
     this.world.step(actions);
     this.metrics.record(this.world, this.telemetry);
     this.hashState();
+  }
+
+  /** Continuous WMS demand: seeded random pickup→dropoff tasks at `taskRate` per minute. */
+  private generateTasks(): void {
+    const rate = this.cfg.taskRate;
+    if (!rate || this.world.t < this.nextTaskAt) return;
+    const g = this.grid, rng = this.taskRng;
+    const P = g.stations(CellType.PICKUP), D = g.stations(CellType.DROPOFF);
+    if (!P.length || !D.length) return;
+    const task = { id: `R${this.taskSeq++}`, pickup: rng.pick(P), drop: rng.pick(D), urgency: rng.next() < 0.2 ? 2 : 1 };
+    this.world.releaseTask(task);
+    this.stations.find((s) => s.cell === task.pickup)?.add(task);
+    this.nextTaskAt = this.world.t + Math.max(1, Math.round(600 / rate));
   }
 
   tickSync(): void {
@@ -108,7 +128,8 @@ export class Simulation {
 
   done(): boolean {
     const w = this.world;
-    return (w.parcels.size > 0 && w.tasksDone() === w.parcels.size) || w.t >= this.cfg.maxTicks;
+    if (w.t >= this.cfg.maxTicks) return true;
+    return !this.cfg.taskRate && w.parcels.size > 0 && w.tasksDone() === w.parcels.size;
   }
 
   runSync(): void {

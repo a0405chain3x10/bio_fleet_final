@@ -170,3 +170,32 @@ export const MATRIX: ScenarioSpec[] = [
   { name: 'S4', robots: 10, fault: 'F3' },
   { name: 'S4', robots: 10, fault: 'F4' },
 ];
+
+export interface LiveOpts {
+  robots: number;
+  seed: number;
+  mode: Mode;
+  learned: boolean;
+  tasks: number;
+  taskRate: number;
+  bus: SimConfig['bus'];
+}
+
+/** Interactive run on any (edited) map: robots on seeded free floor cells, batch or continuous tasks. */
+export function liveScenario(map: string[], o: LiveOpts): SimConfig {
+  const g = Grid.fromAscii(map);
+  const rng = new Rng(o.seed * 131 + o.robots);
+  const free: Cell[] = [];
+  for (let c = 0; c < g.size; c++) if (g.type(c) === CellType.FLOOR && g.corridorOf[c] < 0) free.push(c);
+  rng.shuffle(free);
+  const P = g.stations(CellType.PICKUP), D = g.stations(CellType.DROPOFF);
+  const batch = o.taskRate > 0 || !P.length || !D.length ? [] : Array.from({ length: o.tasks }, (_, k) => ({
+    id: `T${k}`, pickup: rng.pick(P), drop: rng.pick(D), urgency: rng.next() < 0.2 ? 2 : 1,
+  }));
+  return {
+    map, mode: o.mode, seed: o.seed, params: { learned: o.learned }, bus: o.bus, batch,
+    taskRate: o.taskRate > 0 ? o.taskRate : undefined,
+    robots: free.slice(0, o.robots).map((cell) => ({ cell, heading: rng.int(0, 3) as Dir })),
+    maxTicks: o.taskRate > 0 ? 36000 * 24 : 30000,
+  };
+}

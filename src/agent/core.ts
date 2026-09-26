@@ -57,6 +57,7 @@ export abstract class AgentCore implements Agent {
   planMs = 0;
   protected cell: Cell = -1;
   protected heading: Dir = 0;
+  protected carrying: string | null = null;
 
   constructor(cfg: AgentConfig) {
     this.id = cfg.id;
@@ -86,6 +87,7 @@ export abstract class AgentCore implements Agent {
     this.out = [];
     this.cell = o.self.cell;
     this.heading = o.self.heading;
+    this.carrying = o.self.carrying;
     for (const m of o.inbox) this.ingest(m);
     this.senseObstacles(o);
     this.detectFailures(o);
@@ -118,7 +120,10 @@ export abstract class AgentCore implements Agent {
     this.lastRx = this.t;
     if (this.failed.has(m.from)) this.unfail(m.from);
     switch (m.type) {
-      case 'HEARTBEAT': this.peers.onHeartbeat(m, this.t); break;
+      case 'HEARTBEAT':
+        this.peers.onHeartbeat(m, this.t);
+        if (m.taskId && m.state.startsWith('toDrop') && !this.carrying) this.tasks.onCarrier(m.from, m.taskId);
+        break;
       case 'TASK':
         this.tasks.onTask(m, this.t);
         for (const r of this.tasks.takeRelays()) this.send(this.tasks.relayMsg(r));

@@ -1,5 +1,5 @@
 # Progress
-Current: M9 (dashboard + results)
+Current: M10 (stretch)
 
 Done
 - M1: shared (types, messages, rng, grid+corridors+BFS cache, presets), world, A* planner. Tests: A* vs Dijkstra, validation, single robot.
@@ -12,8 +12,10 @@ Done
 - M7: progress monitor, PROBE cycles + bay retreat, congestion-aware bids. Dense-20 max stuck 11.4 s.
 - M8: EdgeLearner (EWMA + SGD density/flow), LEARN gossip, heat telemetry, ablation (learned≈static, see DECISIONS).
 
+- M9: UI (canvas renderer, cards, metrics, virtual log, controls, editor, experiments tab w/ Chart.js ±std + CSV), README, perf gate (S4-20: 1.7 s). Target met on all rows; results/final.md.
+
 Next
-- M9 UI (renderer, dashboard, controls, editor, log, experiments tab/charts/CSV), README, perf gate.
+- M10: HMAC signing + rogue robot fault; Node UDP entry point.
 
 Open issues
 - Baseline gridlocks at S3 single gap in 5/10 seeds (inherent to stop-and-wait; reported, not fixed).

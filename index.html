@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BioFleet v2 — Decentralized AMR Fleet</title>
+  <link rel="stylesheet" href="/src/ui/style.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">BioFleet <span>v2</span></div>
+    <nav>
+      <button class="tab active" data-tab="sim">Simulation</button>
+      <button class="tab" data-tab="exp">Experiments</button>
+    </nav>
+    <div id="metrics" class="metrics"></div>
+  </header>
+  <main id="tab-sim" class="tabpane active">
+    <aside id="controls" class="panel left"></aside>
+    <section class="center">
+      <div id="validation" class="validation hidden"></div>
+      <div class="canvas-wrap"><canvas id="world"></canvas></div>
+      <div id="log" class="log"></div>
+    </section>
+    <aside id="robots" class="panel right"></aside>
+  </main>
+  <main id="tab-exp" class="tabpane">
+    <div id="experiments" class="experiments"></div>
+  </main>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

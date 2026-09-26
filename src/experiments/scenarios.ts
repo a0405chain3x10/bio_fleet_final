@@ -7,7 +7,7 @@ import type { FaultEvent } from '../world/faults.ts';
 import type { Rect } from '../transport/Transport.ts';
 
 export type Mode = 'biofleet' | 'baseline';
-export type FaultName = 'none' | 'F1-10' | 'F1-30' | 'F2' | 'F3' | 'F4';
+export type FaultName = 'none' | 'F1-10' | 'F1-30' | 'F2' | 'F3' | 'F4' | 'F5-rogue' | 'F5-rogue-signed';
 
 export interface ScenarioSpec {
   name: string;
@@ -134,7 +134,7 @@ export function s4(seed: number, n: number, preset: PresetName = 'default', task
 
 const BUSY_INTERSECTION: Rect = { x0: 12, y0: 8, x1: 16, y1: 12 };
 
-function faults(f: FaultName, g: Grid): { bus?: SimConfig['bus']; faults?: FaultEvent[] } {
+function faults(f: FaultName, g: Grid): { bus?: SimConfig['bus']; faults?: FaultEvent[]; rogue?: boolean; key?: string } {
   switch (f) {
     case 'none': return {};
     case 'F1-10': return { bus: { loss: 0.1 } };
@@ -142,6 +142,8 @@ function faults(f: FaultName, g: Grid): { bus?: SimConfig['bus']; faults?: Fault
     case 'F2': return { bus: { deadZones: [BUSY_INTERSECTION] } };
     case 'F3': return { faults: [{ t: 300, kind: 'obstacle', cells: [g.idx(8, 7)] }] };
     case 'F4': return { faults: [{ t: 400, kind: 'kill', robot: 'busiest' }] };
+    case 'F5-rogue': return { rogue: true };
+    case 'F5-rogue-signed': return { rogue: true, key: 'biofleet-fleet-key' };
   }
 }
 
@@ -170,6 +172,9 @@ export const MATRIX: ScenarioSpec[] = [
   { name: 'S4', robots: 10, fault: 'F3' },
   { name: 'S4', robots: 10, fault: 'F4' },
 ];
+
+/** M10: rogue robot against an HMAC-signed fleet (slower: every message is signed and verified). */
+export const SECURITY_MATRIX: ScenarioSpec[] = [{ name: 'S4', robots: 10, fault: 'F5-rogue-signed' }];
 
 export interface LiveOpts {
   robots: number;

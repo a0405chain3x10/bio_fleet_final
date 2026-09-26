@@ -5,6 +5,7 @@ import { CellType, type Action, type Cell, type Dir, type Task, type Telemetry }
 import { FaultSchedule, type FaultEvent } from '../world/faults.ts';
 import { Station, STATION_ID_BASE } from '../world/taskSource.ts';
 import { World } from '../world/World.ts';
+import { RogueRobot, ROGUE_ID } from '../world/rogue.ts';
 import { SimBus, type BusOpts } from '../transport/SimBus.ts';
 import type { Transport } from '../transport/Transport.ts';
 import type { AgentRuntime } from './Runtime.ts';
@@ -25,6 +26,10 @@ export interface SimConfig {
   missions?: Task[][];
   faults?: FaultEvent[];
   maxTicks: number;
+  /** fleet HMAC key: every message is signed and verified (M10) */
+  key?: string;
+  /** add a rogue radio endpoint broadcasting forged positions/claims (M10) */
+  rogue?: boolean;
 }
 
 export const DEFAULT_BUS: Omit<BusOpts, 'seed'> = { latency: [1, 2], loss: 0, range: 20, deadZones: [] };
@@ -39,6 +44,7 @@ export class Simulation {
   readonly faults: FaultSchedule;
   private io: Transport[] = [];
   private stations: Station[] = [];
+  rogue: RogueRobot | null = null;
   telemetry: (Telemetry | undefined)[] = [];
   trace = 2166136261;
   private taskRng: Rng;
@@ -54,6 +60,7 @@ export class Simulation {
     const g = this.grid;
     const stationCells = g.stations(CellType.PICKUP);
     this.bus = new SimBus({ ...DEFAULT_BUS, ...cfg.bus, seed: cfg.seed }, (id) => {
+      if (id === ROGUE_ID) return { x: g.w >> 1, y: g.h >> 1 };
       if (id >= STATION_ID_BASE) {
         const c = stationCells[id - STATION_ID_BASE];
         return { x: g.cx(c), y: g.cy(c) };
@@ -62,7 +69,8 @@ export class Simulation {
       return b.alive ? { x: g.cx(b.cell), y: g.cy(b.cell) } : null;
     });
     this.io = this.world.bodies.map((b) => this.bus.register(b.id));
-    this.stations = stationCells.map((c, k) => new Station(STATION_ID_BASE + k, c, this.bus.register(STATION_ID_BASE + k)));
+    this.stations = stationCells.map((c, k) => new Station(STATION_ID_BASE + k, c, this.bus.register(STATION_ID_BASE + k), cfg.key));
+    if (cfg.rogue) this.rogue = new RogueRobot(g, this.bus.register(ROGUE_ID), cfg.seed);
     for (const task of cfg.batch ?? []) {
       this.world.releaseTask(task);
       this.stations.find((s) => s.cell === task.pickup)?.add(task);
@@ -76,7 +84,7 @@ export class Simulation {
   agentConfigs(): AgentConfig[] {
     return this.world.bodies.map((b) => ({
       id: b.id, mode: this.cfg.mode, map: this.cfg.map, seed: hashSeed(this.cfg.seed, b.id),
-      params: { ...DEFAULT_PARAMS, ...this.cfg.params }, mission: this.cfg.missions?.[b.id],
+      params: { ...DEFAULT_PARAMS, ...this.cfg.params }, mission: this.cfg.missions?.[b.id], key: this.cfg.key,
     }));
   }
 
@@ -98,6 +106,7 @@ export class Simulation {
       this.telemetry[i] = a.telemetry;
     }
     this.generateTasks();
+    this.rogue?.tick(this.world.t);
     for (const s of this.stations) s.tick(this.world);
     this.world.step(actions);
     this.metrics.record(this.world, this.telemetry);

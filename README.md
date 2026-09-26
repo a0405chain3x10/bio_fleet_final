@@ -7,9 +7,11 @@ Smart India Hackathon 2026 · PS 26123 (BEL) · *Edge-AI Based Distributed Fleet
 ```bash
 npm install
 npm run dev     # interactive simulation + experiments tab (offline, no backend)
-npm test        # 24 tests, includes the 200-seed safety property test (~15 s)
+npm test        # 29 tests incl. the 200-seed safety property test (~70 s)
 npm run bench   # 420 headless runs → results/bench-*.csv (~3 min)
 npm run perf    # S4, 20 robots: ms/tick p50/p95 + wall time (perf gate)
+npm run bench -- --security       # M10: rogue robot vs HMAC-signed fleet
+npm run agent:node -- --id 0 --peers 1:41001   # one agent headless over UDP (Raspberry Pi benchmark)
 ```
 
 ## Results (10 seeds per row, `results/final.md`)
@@ -30,6 +32,9 @@ npm run perf    # S4, 20 robots: ms/tick p50/p95 + wall time (perf gate)
 | F2 dead zone over busy intersection | 446.8 ± 40.6 | 250.6 ± 14.6 | **−43.9%** | 0 |
 | F3 aisle blocked at t = 30 s | 456.6 ± 41.5 | 254.4 ± 6.6 | **−44.3%** | 0 |
 | F4 robot killed mid-task at t = 40 s | 505.1 ± 57.5 | 266.5 ± 17.4 | **−47.2%** | 0 |
+| F5 rogue robot vs HMAC-signed fleet (M10, `--security`) | 432.9 ± 27.9 | 244.3 ± 12.4 | **−43.6%** | 0 |
+
+Without signing, the rogue's forged LOCKs and positions stall the fleet (0 tasks in 300 s), but still with 0 collisions (`tests/rogue.test.ts`).
 
 ¹ The baseline gridlocks (never finishes) in 9/10 S3 seeds and 6/10 dense seeds; its makespan there is the timeout, so these percentages are **lower bounds**. BioFleet completed every task in all 280 of its runs.
 
@@ -106,7 +111,6 @@ Verified by `tests/safety.test.ts`: random maps, 2–20 agents moving randomly u
 - CBAA can still double-assign under partitions. The second robot finds the shelf empty and drops the task (0 duplicate deliveries in all runs), at the cost of a wasted trip.
 - A PROBE cycle across a radio gap is not detected. The progress monitor and aging handle it instead.
 - The baseline back-off is physical (it steps aside when it *senses* a head-on). Without that, the specified baseline deadlocks on every head-on. This makes the baseline stronger, not weaker.
-- M10 stretch: see `DECISIONS.md`/`PROGRESS.md` for status.
 
 ## Repository map
 

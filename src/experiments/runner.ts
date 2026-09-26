@@ -41,7 +41,7 @@ export function runOne(spec: ScenarioSpec, mode: Mode, seed: number, params?: Pa
   const s = sim.metrics.summary(sim.world);
   const n = cfg.robots.length, secs = sim.world.t / TICKS_PER_SEC;
   let sent = 0, bytes = 0;
-  for (const [id, st] of sim.bus.stats) if (id < 1000) {
+  for (const [id, st] of sim.bus.stats) if (id < n) {
     sent += st.sent;
     bytes += st.bytesSent;
   }

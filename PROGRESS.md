@@ -1,5 +1,5 @@
 # Progress
-Current: M10 (stretch)
+Current: done (M1–M10)
 
 Done
 - M1: shared (types, messages, rng, grid+corridors+BFS cache, presets), world, A* planner. Tests: A* vs Dijkstra, validation, single robot.
@@ -14,8 +14,10 @@ Done
 
 - M9: UI (canvas renderer, cards, metrics, virtual log, controls, editor, experiments tab w/ Chart.js ±std + CSV), README, perf gate (S4-20: 1.7 s). Target met on all rows; results/final.md.
 
+- M10: pure-TS HMAC-SHA256 (== WebCrypto) signing/verification, rogue robot fault (F5), Node UDP agent runner.
+
 Next
-- M10: HMAC signing + rogue robot fault; Node UDP entry point.
+- Optional: real UDP multi-robot discovery, WebCrypto key provisioning UI.
 
 Open issues
 - Baseline gridlocks at S3 single gap in 5/10 seeds (inherent to stop-and-wait; reported, not fixed).

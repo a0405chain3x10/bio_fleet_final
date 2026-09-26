@@ -1,8 +1,8 @@
-/** Headless experiment matrix → results/*.csv.  Usage: npm run bench -- [--seeds 10] [--variants baseline,biofleet] [--tag name] */
+/** Headless experiment matrix → results/*.csv.  Usage: npm run bench -- [--seeds 10] [--variants baseline,biofleet] [--tag name] [--only S4/10] [--security] */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { toCsv } from './csv.ts';
 import { jobs, runJob, summarize, VARIANTS } from './runner.ts';
-import { MATRIX } from './scenarios.ts';
+import { MATRIX, SECURITY_MATRIX } from './scenarios.ts';
 
 const arg = (k: string, d: string): string => {
   const i = process.argv.indexOf(`--${k}`);
@@ -12,7 +12,8 @@ const seeds = Number(arg('seeds', '10'));
 const want = arg('variants', VARIANTS.map((v) => v.label).join(',')).split(',');
 const only = arg('only', '');
 const tag = arg('tag', 'bench');
-const specs = only ? MATRIX.filter((s) => `${s.name}/${s.robots}/${s.fault}`.startsWith(only)) : MATRIX;
+const base = process.argv.includes('--security') ? SECURITY_MATRIX : MATRIX;
+const specs = only ? base.filter((s) => `${s.name}/${s.robots}/${s.fault}`.startsWith(only)) : base;
 const list = jobs(specs, VARIANTS.filter((v) => want.includes(v.label)), seeds);
 
 const t0 = performance.now();

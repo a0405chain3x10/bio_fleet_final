@@ -3,6 +3,7 @@ import {
 } from '../shared/constants.ts';
 import { Grid } from '../shared/grid.ts';
 import type { Msg } from '../shared/messages.ts';
+import { signMsg } from '../shared/hmac.ts';
 import { Rng } from '../shared/rng.ts';
 import { CellType, type Action, type Cell, type Dir, type Observation, type Outgoing, type RobotId, type Task, type Telemetry } from '../shared/types.ts';
 import { feasible, REFRESH_EVERY, SlotClaims } from './battery.ts';
@@ -26,6 +27,8 @@ const now = (): number => (typeof performance !== 'undefined' ? performance.now(
 export abstract class AgentCore implements Agent {
   readonly id: RobotId;
   readonly grid: Grid;
+  private key: string | undefined;
+  rejected = 0;
   readonly planner: Planner;
   readonly params: AgentParams;
   protected rng: Rng;
@@ -64,6 +67,7 @@ export abstract class AgentCore implements Agent {
     this.grid = Grid.fromAscii(cfg.map);
     this.planner = new Planner(this.grid);
     this.params = cfg.params;
+    this.key = cfg.key;
     this.rng = new Rng(cfg.seed * 7919 + cfg.id);
     this.tasks = new TaskBook(cfg.id, (m) => this.send(m as Payload));
     this.tasks.ownerAlive = (id) => {
@@ -79,6 +83,7 @@ export abstract class AgentCore implements Agent {
 
   protected send(m: Payload, to?: RobotId): void {
     const msg = { ...m, from: this.id, seq: this.seq++, t: this.t } as Msg;
+    if (this.key) msg.sig = signMsg(this.key, msg);
     this.out.push(to === undefined ? { msg } : { to, msg });
   }
 
@@ -117,6 +122,10 @@ export abstract class AgentCore implements Agent {
   // ---------- inbox ----------
   protected ingest(m: Msg): void {
     if (m.from === this.id) return;
+    if (this.key && (!m.sig || m.sig.length !== 32 || m.sig !== signMsg(this.key, m))) {
+      this.rejected++;
+      return;
+    }
     this.lastRx = this.t;
     if (this.failed.has(m.from)) this.unfail(m.from);
     switch (m.type) {

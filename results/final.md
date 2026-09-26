@@ -48,3 +48,11 @@ S4/10r/F4            biofleet         10/10      266.5±17.4    47.2    0      9
 S4/10r/F4            biofleet-static  10/10       262.7±9.3    48.0    0      9.0     6.8
 420 runs in 173.8 s → results/final-*.csv
 ```
+
+## M10 security run
+```
+scenario             variant          done      makespan(s)   impr% coll maxStuck msg/r/s
+S4/10r/F5-rogue-signed baseline         10/10      432.9±27.9       —    0     19.9    60.6
+S4/10r/F5-rogue-signed biofleet         10/10      244.3±12.4    43.6    0     13.1    63.7
+20 runs in 173.1 s → results/security-*.csv
+```

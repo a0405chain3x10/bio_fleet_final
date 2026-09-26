@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "bench": "node src/experiments/bench.ts",
-    "perf": "node src/experiments/perf.ts"
+    "perf": "node src/experiments/perf.ts",
+    "agent:node": "node src/node/agent-node.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.3",

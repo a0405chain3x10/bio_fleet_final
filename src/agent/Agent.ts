@@ -1,9 +1,11 @@
 import type { Msg } from '../shared/messages.ts';
-import { CellType, type Action, type Cell, type Observation, type RobotId } from '../shared/types.ts';
+import { PROGRESS_TIMEOUT } from '../shared/constants.ts';
+import { CellType, type Action, type Cell, type Observation, type RobotId, type Task } from '../shared/types.ts';
 import type { AgentConfig } from './contracts.ts';
 import { AgentCore } from './core.ts';
 import { CorridorTable } from './corridor.ts';
 import { buildEdgeCosts } from './costs.ts';
+import { onProbe, PROBE_AFTER, PROBE_EVERY } from './deadlock.ts';
 import { contested, freshIntent, headOnWith, mustYield, passingBlocker } from './passingOrder.ts';
 import type { Peer } from './peers.ts';
 
@@ -15,6 +17,7 @@ const PASS_PATIENCE = 40;
 const YIELD_MAX = 80;
 const HEADON_PATIENCE = 30;
 const QUEUE_DIST = 3;
+const STATION_QUEUE_COST = 30;
 /** waits I chose (not physical blocking): I should not hold up others while doing them */
 const VOLUNTARY = /^(queue|corridor|pass)/;
 
@@ -38,6 +41,12 @@ export class BioFleetAgent extends AgentCore {
   private yieldState: YieldState | null = null;
   private passWait: { id: RobotId; since: number } | null = null;
   private headOnSince = -1;
+  private waitingOn: RobotId = -1;
+  private waitingSince = -1;
+  private lastProbe = -1e9;
+  private lastMonitor = -1e9;
+  private exclude = new Map<Cell, number>();
+  retreats = 0;
 
   constructor(cfg: AgentConfig) {
     super(cfg);
@@ -55,7 +64,61 @@ export class BioFleetAgent extends AgentCore {
       }
       case 'LEFT': this.peers.onLeft(m.from, m.cell, this.t); break;
       case 'CORRIDOR': this.corridors.onMsg(m, this.t); break;
+      case 'PROBE': this.handleProbe(m); break;
     }
+  }
+
+  // ---------- deadlock / livelock ----------
+  private handleProbe(m: Extract<Msg, { type: 'PROBE' }>): void {
+    const r = onProbe(this.id, this.prio.value, this.waitingOn, m);
+    if (r.kind === 'forward') this.send({ type: 'PROBE', initiator: m.initiator, path: r.path, prios: r.prios }, r.to);
+    else if (r.kind === 'retreat') this.pendingRetreat = true;
+    else if (r.kind === 'cycle') {
+      if (r.victim === this.id) this.pendingRetreat = true;
+      else this.send({ type: 'PROBE', initiator: this.id, path: r.members, prios: [], victim: r.victim }, r.victim);
+    }
+  }
+  private pendingRetreat = false;
+
+  /** Track whom I wait on; probe the wait-for graph when it lasts. */
+  private noteWait(id: RobotId): void {
+    if (id !== this.waitingOn) {
+      this.waitingOn = id;
+      this.waitingSince = this.t;
+    }
+    if (id < 0 || this.t - this.waitingSince < PROBE_AFTER || this.t - this.lastProbe < PROBE_EVERY) return;
+    this.lastProbe = this.t;
+    this.send({ type: 'PROBE', initiator: this.id, path: [this.id], prios: [this.prio.value] }, id);
+  }
+
+  /** No progress for 6 s: raise aging and replan around the cells currently blocking me. */
+  private progressMonitor(o: Observation, next: Cell): void {
+    if (this.t - this.lastProgressT < PROGRESS_TIMEOUT || this.t - this.lastMonitor < PROGRESS_TIMEOUT) return;
+    this.lastMonitor = this.t;
+    this.prio.agingBoost += 5;
+    const blockers = [next, ...o.robots.filter((r) => this.grid.manhattan(r.cell, o.self.cell) === 1).map((r) => r.cell)];
+    for (const c of blockers) if (c >= 0 && c !== this.goal) this.exclude.set(c, this.t + 30);
+    this.replanFlag = true;
+    this.lastPlanT = -1e9;
+  }
+
+  private retreat(o: Observation): Action | null {
+    this.pendingRetreat = false;
+    this.retreats++;
+    const avoid = o.robots.map((r) => r.cell);
+    return this.startYield(o, null, -1, avoid, true);
+  }
+
+  /** Bid cost + expected queueing at the pickup (peers already heading there, from their heartbeats). */
+  protected bidCost(o: Observation, task: Task): number | null {
+    const base = super.bidCost(o, task);
+    if (base === null) return null;
+    let n = 0;
+    for (const p of this.peers.fresh(this.t, 20)) {
+      if (!p.taskId || !p.state.startsWith('toPickup')) continue;
+      if (this.tasks.entries.get(p.taskId)?.task.pickup === task.pickup) n++;
+    }
+    return base + n * STATION_QUEUE_COST;
   }
 
   protected corridorTelemetry() {
@@ -88,7 +151,15 @@ export class BioFleetAgent extends AgentCore {
     buildEdgeCosts(this);
     this.rev = this.blockedRev;
     this.replanFlag = false;
-    this.replan(o, { edgeExtra: this.edgeCost, cellPenalty: this.failPen });
+    const ex: Cell[] = [];
+    for (const [c, until] of this.exclude) {
+      if (until < this.t) this.exclude.delete(c);
+      else if (!this.blockedArr[c]) ex.push(c);
+    }
+    for (const c of ex) this.blockedArr[c] = 1;
+    const ok = this.replan(o, { edgeExtra: this.edgeCost, cellPenalty: this.failPen });
+    for (const c of ex) this.blockedArr[c] = 0;
+    if (!ok && ex.length) this.replan(o, { edgeExtra: this.edgeCost, cellPenalty: this.failPen });
     this.announceIntent();
   }
 
@@ -101,6 +172,10 @@ export class BioFleetAgent extends AgentCore {
   // ---------- main ----------
   protected navigate(o: Observation): Action {
     this.onCellChange(o);
+    if (this.pendingRetreat && !o.self.busy) {
+      const r = this.retreat(o);
+      if (r) return r;
+    }
     if (this.yieldState) return this.yieldStep(o);
     this.trimPath(o);
     if (this.needsPlan()) this.plan(o);
@@ -115,13 +190,17 @@ export class BioFleetAgent extends AgentCore {
     if (o.self.moving) return { kind: 'wait', indicator: gate ? -1 : next, outbox: [] };
     const yielded = this.checkHeadOn(o, next) ?? (gate && VOLUNTARY.test(gate) ? this.makeRoom(o) ?? this.makeRoomSensed(o) : null);
     if (yielded) return yielded;
+    this.progressMonitor(o, next);
     if (gate) {
       this.waitReason = gate;
+      const m = /-(\d+)$|:(\d+)$/.exec(gate);
+      this.noteWait(m ? Number(m[1] ?? m[2]) : gate === 'queue' ? this.occupantOf(o, this.goal) : -1);
       return { kind: 'wait', indicator: -1, outbox: [] };
     }
     const { action, verdict } = this.stepInto(o, next);
     if (verdict === 'go') this.onDepart(from, next);
     else if (verdict !== 'turn' && verdict !== 'signal') this.waitReason = `blocked:${verdict}`;
+    this.noteWait(verdict === 'occupied' || verdict === 'yield-id' ? this.occupantOf(o, next) : -1);
     return action;
   }
 
@@ -235,7 +314,7 @@ export class BioFleetAgent extends AgentCore {
     return null;
   }
 
-  private startYield(o: Observation, p: Peer | null, id = p?.id ?? -1, extraAvoid: Cell[] = []): Action | null {
+  private startYield(o: Observation, p: Peer | null, id = p?.id ?? -1, extraAvoid: Cell[] = [], bay = false): Action | null {
     // may pass through the other's upcoming cells (backing out of its way) but must not stop on them
     const noStop = new Set<Cell>(p ? p.intent.slice(0, this.params.window) : []);
     const avoid = new Set<Cell>([...extraAvoid, ...(p ? [p.cell] : [])]);
@@ -243,7 +322,7 @@ export class BioFleetAgent extends AgentCore {
       avoid.add(r.cell);
       if (r.to >= 0) avoid.add(r.to);
     }
-    const route = this.sideCell(o.self.cell, avoid, noStop);
+    const route = (bay && this.sideCell(o.self.cell, avoid, noStop, true)) || this.sideCell(o.self.cell, avoid, noStop);
     if (!route) return null;
     this.yieldState = { target: route[route.length - 1], path: route, forId: id, until: this.t + YIELD_MAX, vacate: o.self.cell };
     this.path = route;
@@ -252,7 +331,7 @@ export class BioFleetAgent extends AgentCore {
   }
 
   /** BFS to the nearest free cell off the other robot's path; bays preferred, corridors and stations avoided. */
-  private sideCell(start: Cell, avoid: Set<Cell>, noStop: Set<Cell>): Cell[] | null {
+  private sideCell(start: Cell, avoid: Set<Cell>, noStop: Set<Cell>, bayOnly = false): Cell[] | null {
     const g = this.grid, parent = new Map<Cell, Cell>([[start, -1]]);
     let frontier = [start];
     for (let depth = 0; depth < 16 && frontier.length; depth++) {
@@ -265,7 +344,7 @@ export class BioFleetAgent extends AgentCore {
           parent.set(m, c);
           nextF.push(m);
           const ty = g.type(m);
-          const good = (ty === CellType.BAY || ty === CellType.FLOOR) && this.corridors.cid(m) < 0 && !noStop.has(m);
+          const good = (ty === CellType.BAY || (!bayOnly && ty === CellType.FLOOR)) && this.corridors.cid(m) < 0 && !noStop.has(m);
           if (good && (found < 0 || (ty === CellType.BAY && g.type(found) !== CellType.BAY))) found = m;
         }
       if (found >= 0) {

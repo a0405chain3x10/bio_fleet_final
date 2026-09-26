@@ -163,6 +163,7 @@ export const MATRIX: ScenarioSpec[] = [
   { name: 'S4', robots: 5, fault: 'none' },
   { name: 'S4', robots: 10, fault: 'none' },
   { name: 'S4', robots: 20, fault: 'none' },
+  { name: 'S4:dense', robots: 20, fault: 'none' },
   { name: 'S4', robots: 10, fault: 'F1-10' },
   { name: 'S4', robots: 10, fault: 'F1-30' },
   { name: 'S4', robots: 10, fault: 'F2' },

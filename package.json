@@ -10,7 +10,8 @@
     "test": "vitest run",
     "bench": "node src/experiments/bench.ts",
     "perf": "node src/experiments/perf.ts",
-    "agent:node": "node src/node/agent-node.ts"
+    "agent:node": "node src/node/agent-node.ts",
+    "build:docs": "vite build --outDir docs --emptyOutDir && touch docs/.nojekyll"
   },
   "devDependencies": {
     "@types/node": "^26.6.3",

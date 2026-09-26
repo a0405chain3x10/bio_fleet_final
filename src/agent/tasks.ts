@@ -137,6 +137,20 @@ export class TaskBook {
       }
   }
 
+  /** I physically hold this parcel: it is mine regardless of what the auction view says. */
+  adopt(taskId: string, t: number): void {
+    const e = this.entries.get(taskId);
+    if (e) {
+      e.status = 'locked';
+      e.owner = this.me;
+      e.ownerCost = -1;
+    }
+    this.myTask = taskId;
+    this.myState = 'locked';
+    this.myCost = -1;
+    void t;
+  }
+
   /** Parcel was not on the shelf: someone else has it. Don't re-bid until a station re-advertises it. */
   markTaken(): void {
     if (!this.myTask) return;

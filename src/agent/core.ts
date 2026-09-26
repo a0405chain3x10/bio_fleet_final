@@ -183,6 +183,17 @@ export abstract class AgentCore implements Agent {
     if (this.t - this.lastRx > 10) return;
     // a sensed robot frozen in place and silent on the radio is presumed failed
     for (const r of o.robots) {
+      const known = this.failed.get(r.id);
+      if (known && r.indicator >= 0) this.unfail(r.id); // its LED is on: alive after all
+      else if (known) {
+        const seen = r.to >= 0 ? [r.cell, r.to] : [r.cell];
+        if (seen.some((c) => !known.includes(c)) || known.some((c) => !seen.includes(c))) {
+          // I can see where the failed robot really is: move the obstacle there
+          for (const c of known) if (this.blocked.get(c)?.src === 'fail') this.removeBlocked(c);
+          this.failed.delete(r.id);
+          this.markFailed(r.id, seen);
+        }
+      }
       const st = this.still.get(r.id);
       if (!st || st.cell !== r.cell || st.to !== r.to || r.indicator >= 0) this.still.set(r.id, { cell: r.cell, to: r.to, since: this.t });
       else if (this.t - st.since > T_FAIL && !this.failed.has(r.id) && !this.hearsFrom(r.id))
@@ -225,7 +236,10 @@ export abstract class AgentCore implements Agent {
     const w = o.self.lastWork;
     if (this.workPending === 'pick') {
       if (w === 'failed') this.tasks.markTaken();
-      else if (w === 'picked') this.send({ type: 'LOCK', taskId: this.tasks.myTask!, cost: 0, bidder: this.id });
+      else if (w === 'picked' && o.self.carrying) {
+        this.tasks.adopt(o.self.carrying, this.t);
+        this.send({ type: 'LOCK', taskId: o.self.carrying, cost: -1, bidder: this.id });
+      }
     } else if (w === 'dropped') {
       this.tasks.complete(this.t);
       this.mission.shift();
@@ -282,7 +296,8 @@ export abstract class AgentCore implements Agent {
     if (this.needsCharge(o)) {
       if (this.tasks.myTask) this.tasks.dropMine(true);
       const c = this.claimSlot([CellType.CHARGER]);
-      this.setGoal(this.cell === c ? 'charging' : 'toCharger', c);
+      if (c < 0) this.setGoal(this.okToRest(this.cell) ? 'idle' : 'toCharger', this.cell); // all taken: wait for one
+      else this.setGoal(this.cell === c ? 'charging' : 'toCharger', c);
       return;
     }
     const task = this.tasks.current;
@@ -292,7 +307,8 @@ export abstract class AgentCore implements Agent {
       return;
     }
     if (this.mode === 'retreat' && this.goal >= 0 && this.retreatActive()) return;
-    const park = this.claimSlot([CellType.BAY, CellType.CHARGER]);
+    let park = this.claimSlot([CellType.BAY]);
+    if (park < 0 && !this.okToRest(this.cell)) park = this.claimSlot([CellType.CHARGER]);
     this.setGoal(park === this.cell || park < 0 ? 'parked' : 'idle', park < 0 ? this.cell : park);
   }
 
@@ -312,22 +328,25 @@ export abstract class AgentCore implements Agent {
     if (this.slot >= 0 && types.includes(this.grid.type(this.slot)) && !this.slots.mustYield(this.slot, this.t) && !this.peerSits(this.slot)) return this.slot;
     this.releaseSlot();
     let best = -1, bd = Infinity;
-    for (const ty of types) {
+    for (const ty of types)
       for (const c of this.grid.stations(ty)) {
         if (this.slots.takenByOther(c, this.t) || this.peerSits(c) || this.blockedArr[c] || this.failPen[c]) continue;
-        const d = this.distCells(this.cell, c) + (ty === CellType.CHARGER && types.length > 1 ? 30 : 0);
+        const d = this.distCells(this.cell, c);
         if (d < bd) {
           bd = d;
           best = c;
         }
       }
-      if (best >= 0 && types.length > 1 && ty === CellType.BAY) break;
-    }
     if (best >= 0) {
       this.slot = best;
       this.send({ type: 'LOCK', taskId: SlotClaims.id(best), cost: 0, bidder: this.id });
     }
     return best;
+  }
+
+  /** Idle robots never rest on stations or in corridors. */
+  private okToRest(c: Cell): boolean {
+    return this.grid.type(c) === CellType.FLOOR && this.grid.corridorOf[c] < 0;
   }
 
   private peerSits(c: Cell): boolean {
@@ -365,7 +384,7 @@ export abstract class AgentCore implements Agent {
         this.workPending = 'drop';
         return { kind: 'drop', taskId: s.carrying, indicator: -1, outbox: [] };
       }
-      return { kind: 'wait', indicator: -1, outbox: [] };
+      return this.restingAction(o) ?? { kind: 'wait', indicator: -1, outbox: [] };
     }
     if (s.busy && !s.moving) return { kind: 'wait', indicator: s.indicator, outbox: [] };
     return this.navigate(o);
@@ -373,13 +392,27 @@ export abstract class AgentCore implements Agent {
 
   protected abstract navigate(o: Observation): Action;
 
+  /** Hook while resting at the goal (parked, charging). */
+  protected restingAction(_o: Observation): Action | null {
+    return null;
+  }
+
+  get now(): number {
+    return this.t;
+  }
+
+  /** Learned per-edge extra delay (ticks), or null for static costs. */
+  learnedCosts(): Float32Array | null {
+    return null;
+  }
+
   private periodic(o: Observation): void {
     const urgency = o.self.carrying ? 2 : o.self.battery < LOW_BATTERY ? 2 : this.tasks.current ? 1 : 0;
     if (this.prio.tick(this.t, urgency)) this.onEpoch();
     if (this.t % HEARTBEAT_EVERY === this.id % HEARTBEAT_EVERY) {
       this.send({
         type: 'HEARTBEAT', cell: o.self.cell, heading: o.self.heading, battery: Math.round(o.self.battery * 10) / 10,
-        state: this.mode, priority: this.prio.value, taskId: o.self.carrying ?? this.tasks.myTask,
+        state: this.waitReason ? `${this.mode}:wait` : this.mode, priority: this.prio.value, taskId: o.self.carrying ?? this.tasks.myTask,
         committed: o.self.moving ? [o.self.cell, o.self.moveTarget] : [o.self.cell],
       });
     }

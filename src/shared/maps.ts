@@ -18,10 +18,11 @@ function build(paint: Painter, w = W, h = H): Grid {
 
 const STATION_ROWS = [3, 6, 9, 12, 15];
 
-/** Walls at x=0/29 with pickup pockets left and dropoff pockets right; chargers + parking bays in row 19. */
+/** Walls at x=0/29; pass-through pickups on the left aisle, dropoffs on the right; chargers + parking bays in row 19. */
 function frame(x: number, y: number, chargers: number[], bays: number[]): string | null {
-  if (x === 0) return STATION_ROWS.includes(y) ? 'P' : '#';
-  if (x === W - 1) return STATION_ROWS.includes(y) ? 'D' : '#';
+  if (x === 0 || x === W - 1) return '#';
+  if (x === 1 && STATION_ROWS.includes(y)) return 'P';
+  if (x === W - 2 && STATION_ROWS.includes(y)) return 'D';
   if (y === H - 1) return chargers.includes(x) ? 'C' : bays.includes(x) ? 'B' : '#';
   return null;
 }

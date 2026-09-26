@@ -16,7 +16,7 @@ describe('map validation', () => {
   });
   it('flags unreachable stations', () => {
     const g = makePreset('default');
-    g.set(g.idx(1, 3), CellType.SHELF);
+    g.set(g.idx(2, 3), CellType.SHELF);
     g.set(g.idx(1, 2), CellType.SHELF);
     g.set(g.idx(1, 4), CellType.SHELF);
     expect(validateMap(g).some((e) => e.includes('unreachable'))).toBe(true);

@@ -31,6 +31,8 @@ export interface SensedRobot {
   heading: Dir;
   indicator: Cell;
   moving: boolean;
+  /** second cell physically covered while between cells (-1 if at a cell centre) — seen, not signalled */
+  to: Cell;
 }
 
 export type WorkResult = 'none' | 'picked' | 'dropped' | 'failed';

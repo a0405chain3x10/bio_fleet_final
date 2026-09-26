@@ -40,6 +40,12 @@ function runSeed(seed: number, ticks: number): { collisions: number; moved: numb
   const want = new Int32Array(n).fill(-1);
   const actions: Action[] = new Array(n);
   for (let t = 0; t < ticks; t++) {
+    // robots die (frozen, LED off, possibly mid-move) and come back
+    if (rng.next() < 0.002) {
+      const b = w.bodies[rng.int(0, n - 1)];
+      if (b.alive) w.kill(b.id);
+      else w.revive(b.id);
+    }
     for (let i = 0; i < n; i++) actions[i] = randomAgent(w.observe(i, []), w, rng, want);
     w.step(actions);
   }

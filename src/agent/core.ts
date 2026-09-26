@@ -17,6 +17,9 @@ type Payload = Msg extends infer M ? (M extends Msg ? Omit<M, 'from' | 'seq' | '
 
 export type Mode = 'idle' | 'toPickup' | 'toDrop' | 'toCharger' | 'charging' | 'parked' | 'retreat';
 
+const FAIL_PENALTY = 300;
+const SILENCE_RADIUS = 10;
+
 const now = (): number => (typeof performance !== 'undefined' ? performance.now() : 0);
 
 /** Behaviour shared by BioFleet and the baseline: inbox, CBAA, battery, goals, heartbeats, path following. */
@@ -43,8 +46,11 @@ export abstract class AgentCore implements Agent {
   private workPending: 'pick' | 'drop' | null = null;
   protected blocked = new Map<Cell, { until: number; src: 'sense' | 'msg' | 'fail' }>();
   blockedArr: Uint8Array;
+  failPen: Float32Array;
+  private lastRx = -1e9;
   protected blockedRev = 0;
-  protected failed = new Map<RobotId, Cell>();
+  protected failed = new Map<RobotId, Cell[]>();
+  private still = new Map<RobotId, { cell: Cell; to: Cell; since: number }>();
   protected lastDist = Infinity;
   lastProgressT = 0;
   waitReason = '';
@@ -67,6 +73,7 @@ export abstract class AgentCore implements Agent {
     this.prio = new PriorityClock(cfg.id);
     this.mission = [...(cfg.mission ?? [])];
     this.blockedArr = new Uint8Array(this.grid.size);
+    this.failPen = new Float32Array(this.grid.size);
   }
 
   protected send(m: Payload, to?: RobotId): void {
@@ -81,7 +88,7 @@ export abstract class AgentCore implements Agent {
     this.heading = o.self.heading;
     for (const m of o.inbox) this.ingest(m);
     this.senseObstacles(o);
-    this.detectFailures();
+    this.detectFailures(o);
     this.updateWork(o);
     this.taskLayer(o);
     this.chooseGoal(o);
@@ -105,6 +112,7 @@ export abstract class AgentCore implements Agent {
   // ---------- inbox ----------
   protected ingest(m: Msg): void {
     if (m.from === this.id) return;
+    this.lastRx = this.t;
     if (this.failed.has(m.from)) this.unfail(m.from);
     switch (m.type) {
       case 'HEARTBEAT': this.peers.onHeartbeat(m, this.t); break;
@@ -136,14 +144,17 @@ export abstract class AgentCore implements Agent {
   }
 
   // ---------- world knowledge ----------
+  /** Sensed obstacles and BLOCKED reports are hard; presumed-failed robots are a soft (uncertain) cost. */
   protected addBlocked(c: Cell, until: number, src: 'sense' | 'msg' | 'fail'): void {
     this.blocked.set(c, { until, src });
-    this.blockedArr[c] = 1;
+    if (src === 'fail') this.failPen[c] = FAIL_PENALTY;
+    else this.blockedArr[c] = 1;
     this.blockedRev++;
   }
   protected removeBlocked(c: Cell): void {
     if (!this.blocked.delete(c)) return;
     this.blockedArr[c] = 0;
+    this.failPen[c] = 0;
     this.blockedRev++;
   }
 
@@ -154,7 +165,7 @@ export abstract class AgentCore implements Agent {
         this.addBlocked(c, Infinity, 'sense');
         this.send({ type: 'BLOCKED', cell: c, ttl: 600 });
       }
-    const occupied = new Set(o.robots.map((r) => r.cell));
+    const occupied = new Set(o.robots.flatMap((r) => [r.cell, r.to]));
     for (const [c, b] of this.blocked) {
       if (b.until < this.t) {
         this.removeBlocked(c);
@@ -167,21 +178,45 @@ export abstract class AgentCore implements Agent {
     }
   }
 
-  private detectFailures(): void {
-    if (this.t % 5) return;
-    for (const p of this.peers.peers.values()) {
-      if (this.failed.has(p.id) || this.t - p.lastHeard <= T_FAIL || p.cell < 0) continue;
-      this.failed.set(p.id, p.cell);
-      this.tasks.reopenOwnedBy(p.id);
-      this.slots.releaseAllOf(p.id);
-      if (!this.blocked.has(p.cell)) this.addBlocked(p.cell, this.t + 300, 'fail');
+  private detectFailures(o: Observation): void {
+    // if I hear nobody at all, my own radio is the likelier culprit: presume nothing
+    if (this.t - this.lastRx > 10) return;
+    // a sensed robot frozen in place and silent on the radio is presumed failed
+    for (const r of o.robots) {
+      const st = this.still.get(r.id);
+      if (!st || st.cell !== r.cell || st.to !== r.to || r.indicator >= 0) this.still.set(r.id, { cell: r.cell, to: r.to, since: this.t });
+      else if (this.t - st.since > T_FAIL && !this.failed.has(r.id) && !this.hearsFrom(r.id))
+        this.markFailed(r.id, r.to >= 0 ? [r.cell, r.to] : [r.cell]);
     }
+    if (this.t % 5) return;
+    for (const p of this.peers.peers.values())
+      if (!this.failed.has(p.id) && this.t - p.lastHeard > T_FAIL && p.cell >= 0 && this.nearby(p.cell)) this.markFailed(p.id, p.committed.length ? p.committed : [p.cell]);
+    if (this.t % 50 === 0) for (const [id, st] of this.still) if (this.t - st.since > 600) this.still.delete(id);
+  }
+
+  /** close enough that silence is suspicious rather than just out of radio range */
+  private nearby(c: Cell): boolean {
+    const dx = this.grid.cx(c) - this.grid.cx(this.cell), dy = this.grid.cy(c) - this.grid.cy(this.cell);
+    return dx * dx + dy * dy <= SILENCE_RADIUS * SILENCE_RADIUS;
+  }
+
+  private hearsFrom(id: RobotId): boolean {
+    const p = this.peers.peers.get(id);
+    return !!p && this.t - p.lastHeard <= T_FAIL;
+  }
+
+  /** Reopen its tasks and treat its cells as static obstacles until it is heard again. */
+  private markFailed(id: RobotId, cells: Cell[]): void {
+    this.failed.set(id, cells);
+    this.tasks.reopenOwnedBy(id);
+    this.slots.releaseAllOf(id);
+    for (const c of cells) if (!this.blocked.has(c)) this.addBlocked(c, Infinity, 'fail');
   }
 
   private unfail(id: RobotId): void {
-    const c = this.failed.get(id)!;
+    for (const c of this.failed.get(id)!) if (this.blocked.get(c)?.src === 'fail') this.removeBlocked(c);
     this.failed.delete(id);
-    if (this.blocked.get(c)?.src === 'fail') this.removeBlocked(c);
+    this.still.delete(id);
   }
 
   // ---------- tasks ----------
@@ -279,7 +314,7 @@ export abstract class AgentCore implements Agent {
     let best = -1, bd = Infinity;
     for (const ty of types) {
       for (const c of this.grid.stations(ty)) {
-        if (this.slots.takenByOther(c, this.t) || this.peerSits(c) || this.blockedArr[c]) continue;
+        if (this.slots.takenByOther(c, this.t) || this.peerSits(c) || this.blockedArr[c] || this.failPen[c]) continue;
         const d = this.distCells(this.cell, c) + (ty === CellType.CHARGER && types.length > 1 ? 30 : 0);
         if (d < bd) {
           bd = d;
@@ -387,7 +422,7 @@ export abstract class AgentCore implements Agent {
 
   /** Who physically blocks `c` according to my sensors (for wait-for edges). */
   protected occupantOf(o: Observation, c: Cell): RobotId {
-    for (const r of o.robots) if (r.cell === c || (r.moving && r.indicator === c)) return r.id;
+    for (const r of o.robots) if (r.cell === c || r.to === c) return r.id;
     return -1;
   }
 

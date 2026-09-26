@@ -1,4 +1,4 @@
-import type { Cell, RobotId } from '../shared/types.ts';
+import { CellType, type Cell, type RobotId } from '../shared/types.ts';
 import type { World } from './World.ts';
 
 export type FaultEvent =
@@ -30,8 +30,9 @@ export class FaultSchedule {
   }
 }
 
-/** "Mid-task" victim: prefer a robot carrying a parcel, else the lowest id that is moving. */
+/** "Mid-task" victim: a robot driving with a parcel, else any robot driving (never parked on a station). */
 function pickVictim(w: World): RobotId {
-  const alive = w.bodies.filter((b) => b.alive);
-  return (alive.find((b) => b.carrying) ?? alive.find((b) => b.busy === 'move') ?? alive[0]).id;
+  const onFloor = (c: Cell): boolean => w.grid.type(c) === CellType.FLOOR;
+  const alive = w.bodies.filter((b) => b.alive && b.busy === 'move' && onFloor(b.cell) && onFloor(b.target));
+  return (alive.find((b) => b.carrying) ?? alive[0] ?? w.bodies.find((b) => b.alive)!).id;
 }

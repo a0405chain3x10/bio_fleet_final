@@ -33,6 +33,7 @@ export function sense(
         heading: b.heading,
         indicator: b.alive ? b.indicator : -1,
         moving: b.busy === 'move',
+        to: b.busy === 'move' ? b.target : -1,
       });
     }
   return { robots, obstacles };

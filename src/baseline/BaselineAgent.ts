@@ -24,6 +24,10 @@ export class BaselineAgent extends AgentCore {
       return this.backoffStep(o);
     }
     this.trimPath(o);
+    if (this.tempUntil > 0 && this.t >= this.tempUntil) {
+      this.tempUntil = -1; // detour constraint expired: back to the static shortest path
+      this.path = [];
+    }
     if (!this.path.length || this.planGoal !== this.goal || this.rev !== this.blockedRev) this.plan(o);
     const next = this.path[0] ?? -1;
     if (s.moving) return { kind: 'wait', indicator: next, outbox: [] };
@@ -77,8 +81,8 @@ export class BaselineAgent extends AgentCore {
     this.rev = this.blockedRev;
     const temp = this.t < this.tempUntil && this.tempBlock >= 0 && this.tempBlock !== this.goal && !this.blockedArr[this.tempBlock];
     if (temp) this.blockedArr[this.tempBlock] = 1;
-    const ok = this.replan(o, {});
+    const ok = this.replan(o, { cellPenalty: this.failPen });
     if (temp) this.blockedArr[this.tempBlock] = 0;
-    if (!ok && temp) this.replan(o, {});
+    if (!ok && temp) this.replan(o, { cellPenalty: this.failPen });
   }
 }

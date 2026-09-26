@@ -13,7 +13,7 @@ export function checkMove(o: Observation, target: Cell): SafetyVerdict {
   for (const c of o.obstacles) if (c === target) return 'obstacle';
   const me = o.self.id;
   for (const r of o.robots) {
-    if (r.cell === target || (r.moving && r.indicator === target)) return 'occupied';
+    if (r.cell === target || r.to === target) return 'occupied';
     if (r.indicator === target && r.id < me) return 'yield-id';
   }
   return 'go';

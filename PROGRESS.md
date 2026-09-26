@@ -1,5 +1,5 @@
 # Progress
-Current: M5 (coordination)
+Current: M9 (dashboard + results)
 
 Done
 - M1: shared (types, messages, rng, grid+corridors+BFS cache, presets), world, A* planner. Tests: A* vs Dijkstra, validation, single robot.
@@ -7,8 +7,13 @@ Done
 - M3: agent core (CBAA, slots, peers, failure detection), SimBus, Inline/Worker runtimes; boundary + determinism tests.
 - M4: BaselineAgent, scenarios S1–S4 + F1–F4, runner/csv/bench. Baseline table: results/baseline-m4.md.
 
+- M5: INTENT, passing order, head-on yielding, corridor locks, intent-aware costs, station queueing. All S1–S4 + faults complete, 0 collisions.
+- M6: re-auction (>30% ETA, 20 s hysteresis), charging slots, BLOCKED, failure reopen. Tests: CBAA unit + F3/F4.
+- M7: progress monitor, PROBE cycles + bay retreat, congestion-aware bids. Dense-20 max stuck 11.4 s.
+- M8: EdgeLearner (EWMA + SGD density/flow), LEARN gossip, heat telemetry, ablation (learned≈static, see DECISIONS).
+
 Next
-- M5 INTENT, passing order, head-on yielding, corridor locks in BioFleetAgent.
+- M9 UI (renderer, dashboard, controls, editor, log, experiments tab/charts/CSV), README, perf gate.
 
 Open issues
 - Baseline gridlocks at S3 single gap in 5/10 seeds (inherent to stop-and-wait; reported, not fixed).

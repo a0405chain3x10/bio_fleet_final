@@ -1,11 +1,12 @@
 import type { Msg } from '../shared/messages.ts';
-import { PROGRESS_TIMEOUT } from '../shared/constants.ts';
-import { CellType, type Action, type Cell, type Observation, type RobotId, type Task } from '../shared/types.ts';
+import { LEARN_EVERY, MOVE_TICKS, PROGRESS_TIMEOUT, TURN180_TICKS, TURN90_TICKS } from '../shared/constants.ts';
+import { CellType, type Action, type Cell, type Dir, type Observation, type RobotId, type Task, type Telemetry } from '../shared/types.ts';
 import type { AgentConfig } from './contracts.ts';
 import { AgentCore } from './core.ts';
 import { CorridorTable } from './corridor.ts';
 import { buildEdgeCosts } from './costs.ts';
 import { onProbe, PROBE_AFTER, PROBE_EVERY } from './deadlock.ts';
+import { EdgeLearner } from './learning.ts';
 import { contested, freshIntent, headOnWith, mustYield, passingBlocker } from './passingOrder.ts';
 import type { Peer } from './peers.ts';
 
@@ -48,15 +49,91 @@ export class BioFleetAgent extends AgentCore {
   private exclude = new Map<Cell, number>();
   retreats = 0;
 
+  readonly learner: EdgeLearner;
+  private ready: { cell: Cell; next: Cell; t: number; heading: Dir } | null = null;
+
   constructor(cfg: AgentConfig) {
     super(cfg);
     this.corridors = new CorridorTable(this.grid);
     this.edgeCost = new Float32Array(this.grid.size * 4);
+    this.learner = new EdgeLearner(this.grid);
+  }
+
+  // ---------- Edge AI ----------
+  learnedCosts(): Float32Array | null {
+    return this.params.learned ? this.learner.extra : null;
+  }
+
+  private phase(): number {
+    return this.mode === 'toDrop' ? 2 : this.mode === 'toPickup' ? 1 : 0;
+  }
+
+  /** Static distance plus learned extras summed along the BFS gradient (cheap, no A*). */
+  protected legCost(from: Cell, to: Cell): number {
+    const base = super.legCost(from, to);
+    if (!this.params.learned || !isFinite(base)) return base;
+    const dist = this.planner.dists.get(to), nbr = this.grid.nbr, ex = this.learner.extra;
+    let c = from, extra = 0;
+    for (let k = 0; k < 200 && c !== to; k++) {
+      let nx = -1;
+      for (let d = 0; d < 4 && nx < 0; d++) {
+        const m = nbr[c * 4 + d];
+        if (m >= 0 && dist[m] === dist[c] - 1) {
+          nx = m;
+          extra += ex[c * 4 + d];
+        }
+      }
+      if (nx < 0) break;
+      c = nx;
+    }
+    return base + extra;
+  }
+
+  /** Measure how long I waited to enter an edge, beyond the nominal turn time, and learn from it. */
+  private measure(o: Observation, next: Cell): void {
+    if (!this.params.learned) return;
+    const s = o.self;
+    if (!this.ready || this.ready.cell !== s.cell || this.ready.next !== next) {
+      this.ready = { cell: s.cell, next, t: this.t, heading: s.heading };
+    }
+  }
+
+  private learnDeparture(from: Cell, next: Cell): void {
+    const r = this.ready;
+    if (!this.params.learned || !r || r.cell !== from || r.next !== next) return;
+    const d = this.grid.dirTo(from, next);
+    const turn = [0, TURN90_TICKS, TURN180_TICKS, TURN90_TICKS][(d - r.heading + 4) & 3];
+    // +1: the indicator must show for a tick before moving
+    const extra = Math.max(0, this.t - r.t - turn - 1);
+    this.learner.observe(from * 4 + d, Math.min(extra, 3 * MOVE_TICKS * 4), this.phase(), this.t);
+    this.ready = null;
+  }
+
+  private learnTick(): void {
+    if (!this.params.learned || this.t % LEARN_EVERY !== this.id % LEARN_EVERY) return;
+    this.learner.rebuild(this.peers.fresh(this.t, 20).map((p) => p.cell), this.phase(), this.t);
+    const edges = this.learner.gossip();
+    if (edges.length) this.send({ type: 'LEARN', edges });
+  }
+
+  protected extraTelemetry(tm: Telemetry): void {
+    if (!this.params.learned || this.t % 20 !== this.id % 20) return;
+    tm.heat = this.learner.heat();
+    const l = this.learner;
+    tm.flow = Array.from(l.flowX, (fx, c) => {
+      const fy = l.flowY[c];
+      if (Math.hypot(fx, fy) < 0.5) return -1;
+      return Math.abs(fx) > Math.abs(fy) ? (fx > 0 ? 1 : 3) : fy > 0 ? 2 : 0;
+    });
   }
 
   protected onPolicyMessage(m: Msg): void {
     switch (m.type) {
-      case 'HEARTBEAT': this.corridors.onPosition(m.from, m.cell, m.heading, this.t, m.t); break;
+      case 'HEARTBEAT':
+        this.corridors.onPosition(m.from, m.cell, m.heading, this.t, m.t);
+        if (this.params.learned) this.learner.deposit(m.cell, m.heading);
+        break;
+      case 'LEARN': if (this.params.learned) this.learner.merge(m.edges, this.t); break;
       case 'INTENT': {
         const p = this.peers.onIntent(m, this.t);
         if (p && this.path.slice(0, this.params.window).some((c) => m.path.includes(c))) this.replanFlag = true;
@@ -172,6 +249,7 @@ export class BioFleetAgent extends AgentCore {
   // ---------- main ----------
   protected navigate(o: Observation): Action {
     this.onCellChange(o);
+    this.learnTick();
     if (this.pendingRetreat && !o.self.busy) {
       const r = this.retreat(o);
       if (r) return r;
@@ -191,6 +269,7 @@ export class BioFleetAgent extends AgentCore {
     const yielded = this.checkHeadOn(o, next) ?? (gate && VOLUNTARY.test(gate) ? this.makeRoom(o) ?? this.makeRoomSensed(o) : null);
     if (yielded) return yielded;
     this.progressMonitor(o, next);
+    this.measure(o, next);
     if (gate) {
       this.waitReason = gate;
       const m = /-(\d+)$|:(\d+)$/.exec(gate);
@@ -205,6 +284,7 @@ export class BioFleetAgent extends AgentCore {
   }
 
   private onDepart(from: Cell, next: Cell): void {
+    this.learnDeparture(from, next);
     const cid = this.corridors.cid(next);
     if (cid >= 0 && cid !== this.corridors.cid(from)) {
       const dir = this.corridors.entryDir(from, next, this.path[1] ?? -1);

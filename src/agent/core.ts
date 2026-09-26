@@ -4,7 +4,7 @@ import {
 import { Grid } from '../shared/grid.ts';
 import type { Msg } from '../shared/messages.ts';
 import { Rng } from '../shared/rng.ts';
-import { CellType, type Action, type Cell, type Dir, type Observation, type Outgoing, type RobotId, type Task } from '../shared/types.ts';
+import { CellType, type Action, type Cell, type Dir, type Observation, type Outgoing, type RobotId, type Task, type Telemetry } from '../shared/types.ts';
 import { feasible, REFRESH_EVERY, SlotClaims } from './battery.ts';
 import type { Agent, AgentConfig, AgentParams } from './contracts.ts';
 import { PeerTable } from './peers.ts';
@@ -101,6 +101,7 @@ export abstract class AgentCore implements Agent {
       taskId: this.tasks.myTask, priority: this.prio.value, neighbours: this.peers.fresh(this.t, 20).length,
       planMs: this.planMs, corridor: this.corridorTelemetry(),
     };
+    this.extraTelemetry(a.telemetry);
     this.planMs = 0;
     return a;
   }
@@ -108,6 +109,8 @@ export abstract class AgentCore implements Agent {
   protected corridorTelemetry(): { id: number; dir: number } | null {
     return null;
   }
+
+  protected extraTelemetry(_t: Telemetry): void {}
 
   // ---------- inbox ----------
   protected ingest(m: Msg): void {

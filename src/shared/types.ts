@@ -76,6 +76,10 @@ export interface Telemetry {
   neighbours: number;
   planMs: number;
   corridor?: { id: number; dir: number } | null;
+  /** learned congestion per cell (ticks), sent every 2 s when learning is on */
+  heat?: number[];
+  /** dominant neighbour flow direction per cell (-1 none), sent with heat */
+  flow?: number[];
 }
 
 export type ActionKind = 'move' | 'turn' | 'wait' | 'pick' | 'drop';
